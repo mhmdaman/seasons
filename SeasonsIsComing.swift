@@ -108,6 +108,8 @@ enum Cfg {
     // Snowball rolling & physics
     static let ballMinRadius: CGFloat = 5.0         // Initial radius when starting to roll
     static let ballMaxRadius: CGFloat = 28.0        // Max radius for rolled snowballs
+    static let leafMinDim: CGFloat = 13.0           // Minimum size for autumn leaves (small)
+    static let leafMaxDim: CGFloat = 28.0           // Maximum size for autumn leaves (medium, no big leaves)
     static let maxBalls: Int = 20                   // Max resting/rolling balls on screen
     static let ballGravity: CGFloat = 900.0         // px/s^2 for falling balls
     static let stackHorizontalTolerance: CGFloat = 0.9 // Drop above within 0.9 lower radius
@@ -940,12 +942,13 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
             f.node.color = .white
             f.node.colorBlendFactor = 0
             let texSize = leafTex.size()
-            let maxDim: CGFloat = s * 3.6
+            // Only small and medium leaves (no big leaves):
+            let leafSize: CGFloat = (li == 2 ? rnd(22, Cfg.leafMaxDim) : (li == 1 ? rnd(17, 22) : rnd(Cfg.leafMinDim, 17)))
             let aspect = texSize.width / max(1, texSize.height)
             if aspect >= 1.0 {
-                f.node.size = CGSize(width: maxDim, height: maxDim / aspect)
+                f.node.size = CGSize(width: leafSize, height: leafSize / aspect)
             } else {
-                f.node.size = CGSize(width: maxDim * aspect, height: maxDim)
+                f.node.size = CGSize(width: leafSize * aspect, height: leafSize)
             }
         } else {
             f.node.texture = tex
