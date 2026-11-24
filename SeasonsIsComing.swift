@@ -59,8 +59,8 @@ func makeSeason(_ name: String) -> Season? {
                       palette: [c(0.85, 0.30, 0.10), c(0.95, 0.60, 0.10),
                                 c(0.70, 0.15, 0.10), c(0.85, 0.75, 0.20),
                                 c(0.55, 0.30, 0.10)],
-                      count: 90, fallSpeed: 0.9, sizeScale: 2.4, swayScale: 1.8,
-                      spin: 1.6, flip: true, twinkle: false, minAlpha: 0.85, additive: false,
+                      count: 90, fallSpeed: 0.85, sizeScale: 2.4, swayScale: 1.2,
+                      spin: 0, flip: false, twinkle: false, minAlpha: 0.85, additive: false,
                       pileTop: c(0.80, 0.45, 0.12, 0.97), pileShade: c(0.45, 0.22, 0.08, 0.9),
                       pileMax: 12, groundMax: 26, pileAmount: 3.0,
                       ballColor: c(0.78, 0.44, 0.14, 1.0),
@@ -108,8 +108,8 @@ enum Cfg {
     // Snowball rolling & physics
     static let ballMinRadius: CGFloat = 5.0         // Initial radius when starting to roll
     static let ballMaxRadius: CGFloat = 28.0        // Max radius for rolled snowballs
-    static let leafMinDim: CGFloat = 13.0           // Minimum size for autumn leaves (small)
-    static let leafMaxDim: CGFloat = 28.0           // Maximum size for autumn leaves (medium, no big leaves)
+    static let leafMinDim: CGFloat = 14.0           // Minimum size for autumn leaves (small)
+    static let leafMaxDim: CGFloat = 36.0           // Maximum size for autumn leaves (includes slightly bigger leaves)
     static let maxBalls: Int = 20                   // Max resting/rolling balls on screen
     static let ballGravity: CGFloat = 900.0         // px/s^2 for falling balls
     static let stackHorizontalTolerance: CGFloat = 0.9 // Drop above within 0.9 lower radius
@@ -942,8 +942,8 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
             f.node.color = .white
             f.node.colorBlendFactor = 0
             let texSize = leafTex.size()
-            // Only small and medium leaves (no big leaves):
-            let leafSize: CGFloat = (li == 2 ? rnd(22, Cfg.leafMaxDim) : (li == 1 ? rnd(17, 22) : rnd(Cfg.leafMinDim, 17)))
+            // Layer-based sizes: small (14-20), medium (20-27), and slightly bigger (27-36):
+            let leafSize: CGFloat = (li == 2 ? rnd(27, Cfg.leafMaxDim) : (li == 1 ? rnd(20, 27) : rnd(Cfg.leafMinDim, 20)))
             let aspect = texSize.width / max(1, texSize.height)
             if aspect >= 1.0 {
                 f.node.size = CGSize(width: leafSize, height: leafSize / aspect)
@@ -959,7 +959,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
 
         f.node.blendMode = season.additive ? .add : .alpha
         f.node.alpha = f.baseAlpha
-        f.node.zRotation = season.spin > 0 ? rnd(0, 6.28) : 0
+        f.node.zRotation = (season.name == "autumn") ? rnd(-0.2, 0.2) : (season.spin > 0 ? rnd(0, 6.28) : 0)
         f.node.xScale = 1
         f.node.zPosition = L.z
         f.node.position = CGPoint(x: rnd(-40, size.width + 40),
@@ -1572,9 +1572,13 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
                 continue
             }
 
-            if season.spin > 0 { f.node.zRotation += f.spinRate * dt }
-            if season.flip {
-                f.node.xScale = 0.25 + 0.75 * abs(cos(t * f.flipFreq + f.phase))
+            if season.name == "autumn" {
+                f.node.zRotation = sin(t * f.swayFreq + f.phase) * 0.15
+            } else {
+                if season.spin > 0 { f.node.zRotation += f.spinRate * dt }
+                if season.flip {
+                    f.node.xScale = 0.25 + 0.75 * abs(cos(t * f.flipFreq + f.phase))
+                }
             }
             if season.twinkle {
                 f.node.alpha = f.baseAlpha * (0.35 + 0.65 * (0.5 + 0.5 * sin(t * f.flipFreq + f.phase)))
@@ -1645,12 +1649,6 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     let kEnabled = "seasons_enabled"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Accessibility prompt on first launch if not trusted
-        let trusted = checkAccessibility(prompt: true)
-        if !trusted {
-            print("Note: Accessibility permission not granted yet. Piles will activate once enabled.")
-        }
-
         // Primary display selection (monitor with menu bar)
         let primaryScreen = NSScreen.screens.first ?? NSScreen.main!
         let screenFrame = primaryScreen.frame
@@ -1706,12 +1704,9 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     }
 
     func checkAccessibility(prompt: Bool = false) -> Bool {
-        if prompt {
-            let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
-            return AXIsProcessTrustedWithOptions(options)
-        } else {
-            return AXIsProcessTrusted()
-        }
+        // Window tracking uses CGWindowListCopyWindowInfo (Quartz) which reads window
+        // geometries directly without needing AXUIElement accessibility permissions.
+        return true
     }
 
     func buildMenu() {
