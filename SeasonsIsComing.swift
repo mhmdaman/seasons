@@ -233,6 +233,112 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     return SKTexture(image: img)
 }
 
+// MARK: - Leaf Textures Loader (with automatic background removal)
+
+@MainActor func removeWhiteBackgroundIfNeeded(from image: NSImage) -> NSImage {
+    guard let tiff = image.tiffRepresentation,
+          let sourceRep = NSBitmapImageRep(data: tiff),
+          let cgImage = sourceRep.cgImage else { return image }
+    
+    let w = cgImage.width
+    let h = cgImage.height
+    guard w > 0, h > 0 else { return image }
+    
+    let colorSpace = CGColorSpaceCreateDeviceRGB()
+    var cornerPixels = [UInt32](repeating: 0, count: 4)
+    guard let cornerCtx = CGContext(data: &cornerPixels, width: 2, height: 2,
+                                    bitsPerComponent: 8, bytesPerRow: 8,
+                                    space: colorSpace,
+                                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        return image
+    }
+    cornerCtx.draw(cgImage, in: CGRect(x: 0, y: 0, width: 2, height: 2))
+    
+    var needsRemoval = false
+    for px in cornerPixels {
+        let r = CGFloat(px & 0xFF)
+        let g = CGFloat((px >> 8) & 0xFF)
+        let b = CGFloat((px >> 16) & 0xFF)
+        let a = CGFloat((px >> 24) & 0xFF)
+        if a > 200 && r > 215 && g > 215 && b > 215 {
+            needsRemoval = true
+            break
+        }
+    }
+    
+    guard needsRemoval else { return image }
+    
+    guard let ctx = CGContext(data: nil, width: w, height: h,
+                              bitsPerComponent: 8, bytesPerRow: w * 4,
+                              space: colorSpace,
+                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+        return image
+    }
+    ctx.draw(cgImage, in: CGRect(x: 0, y: 0, width: w, height: h))
+    guard let data = ctx.data else { return image }
+    let ptr = data.bindMemory(to: UInt32.self, capacity: w * h)
+    
+    for i in 0..<(w * h) {
+        let px = ptr[i]
+        let r = Double(px & 0xFF)
+        let g = Double((px >> 8) & 0xFF)
+        let b = Double((px >> 16) & 0xFF)
+        
+        let cmax = max(r, max(g, b))
+        let cmin = min(r, min(g, b))
+        let sat = (cmax == 0) ? 0 : (cmax - cmin) / cmax
+        let bright = (r + g + b) / 3.0
+        
+        if sat < 0.12 && bright > 215 {
+            let fade = max(0.0, min(1.0, (245 - bright) / 30.0))
+            if fade <= 0.05 {
+                ptr[i] = 0
+            } else {
+                let newA = UInt32(fade * 255.0)
+                ptr[i] = (px & 0x00FFFFFF) | (newA << 24)
+            }
+        }
+    }
+    
+    guard let outCg = ctx.makeImage() else { return image }
+    return NSImage(cgImage: outCg, size: image.size)
+}
+
+@MainActor func loadAutumnLeafTextures() -> [SKTexture] {
+    let fm = FileManager.default
+    var candidateDirs: [URL] = []
+    
+    if let resUrl = Bundle.main.resourceURL {
+        candidateDirs.append(resUrl.appendingPathComponent("leaves"))
+    }
+    candidateDirs.append(URL(fileURLWithPath: "leaves"))
+    candidateDirs.append(Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("leaves"))
+    
+    for dir in candidateDirs {
+        guard fm.fileExists(atPath: dir.path) else { continue }
+        if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            let pngs = files.filter {
+                $0.pathExtension.lowercased() == "png" &&
+                !$0.lastPathComponent.hasPrefix(".") &&
+                !$0.path.contains("originals")
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            
+            var textures: [SKTexture] = []
+            for fileUrl in pngs {
+                if let rawImg = NSImage(contentsOf: fileUrl) {
+                    let cleaned = removeWhiteBackgroundIfNeeded(from: rawImg)
+                    let tex = SKTexture(image: cleaned)
+                    textures.append(tex)
+                }
+            }
+            if !textures.isEmpty {
+                return textures
+            }
+        }
+    }
+    return []
+}
+
 // MARK: - 3. Particle, Pile & Clump Classes
 
 @MainActor final class Flake {
@@ -676,6 +782,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     var flakes: [Flake] = []
     var pool: [Flake] = []
     var tex: SKTexture?
+    var leafTextures: [SKTexture] = []
     var ballTex: SKTexture?
     var specksTex: SKTexture?
 
@@ -722,6 +829,9 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     func applySeason(_ newSeason: Season) {
         season = newSeason
         tex = makeParticleTexture(season.shape)
+        if newSeason.name == "autumn" && leafTextures.isEmpty {
+            leafTextures = loadAutumnLeafTextures()
+        }
         ballTex = (season.pileMax > 0) ? makeBallTexture(season: season) : nil
         specksTex = (season.pileMax > 0) ? makeSpecksTexture(season: season) : nil
 
@@ -793,8 +903,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     }
 
     func obtain() -> Flake {
-        let f = pool.popLast() ?? Flake(texture: tex!)
-        f.node.texture = tex
+        let f = pool.popLast() ?? Flake(texture: tex ?? SKTexture())
         world.addChild(f.node)
         flakes.append(f)
         return f
@@ -825,11 +934,28 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         f.spinRate = season.spin * rnd(0.4, 1.0) * (Bool.random() ? 1 : -1)
         f.baseAlpha = max(CGFloat.random(in: L.alpha), season.minAlpha)
 
-        f.node.color = season.palette.randomElement()!
-        f.node.colorBlendFactor = 1
+        if season.name == "autumn" && !leafTextures.isEmpty {
+            let leafTex = leafTextures.randomElement()!
+            f.node.texture = leafTex
+            f.node.color = .white
+            f.node.colorBlendFactor = 0
+            let texSize = leafTex.size()
+            let maxDim: CGFloat = s * 3.6
+            let aspect = texSize.width / max(1, texSize.height)
+            if aspect >= 1.0 {
+                f.node.size = CGSize(width: maxDim, height: maxDim / aspect)
+            } else {
+                f.node.size = CGSize(width: maxDim * aspect, height: maxDim)
+            }
+        } else {
+            f.node.texture = tex
+            f.node.color = season.palette.randomElement() ?? .white
+            f.node.colorBlendFactor = 1
+            f.node.size = CGSize(width: s * 2.2, height: s * 2.2)
+        }
+
         f.node.blendMode = season.additive ? .add : .alpha
         f.node.alpha = f.baseAlpha
-        f.node.size = CGSize(width: s * 2.2, height: s * 2.2)
         f.node.zRotation = season.spin > 0 ? rnd(0, 6.28) : 0
         f.node.xScale = 1
         f.node.zPosition = L.z

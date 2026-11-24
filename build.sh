@@ -70,6 +70,12 @@ if [[ -f "AppIcon.icns" ]]; then
     cp "AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+if [[ -d "leaves" ]]; then
+    echo "==> Copying leaves to Resources..."
+    mkdir -p "$RESOURCES_DIR/leaves"
+    cp leaves/*.png "$RESOURCES_DIR/leaves/" 2>/dev/null || true
+fi
+
 echo "==> Ad-hoc code signing..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
