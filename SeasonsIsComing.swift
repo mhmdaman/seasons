@@ -69,8 +69,8 @@ func makeSeason(_ name: String) -> Season? {
     case "spring":
         return Season(name: "spring", symbol: "🌸", shape: .petal,
                       palette: [c(1.0, 0.78, 0.85), c(1.0, 0.88, 0.92), c(0.97, 0.65, 0.78)],
-                      count: 130, fallSpeed: 0.7, sizeScale: 1.9, swayScale: 1.5,
-                      spin: 1.0, flip: true, twinkle: false, minAlpha: 0.8, additive: false,
+                      count: 90, fallSpeed: 0.85, sizeScale: 2.4, swayScale: 1.2,
+                      spin: 0, flip: false, twinkle: false, minAlpha: 0.85, additive: false,
                       pileTop: c(1.0, 0.85, 0.90, 0.97), pileShade: c(0.85, 0.55, 0.65, 0.9),
                       pileMax: 9, groundMax: 20, pileAmount: 2.5,
                       ballColor: c(0.98, 0.82, 0.88, 1.0),
@@ -315,6 +315,41 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     }
     candidateDirs.append(URL(fileURLWithPath: "leaves"))
     candidateDirs.append(Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("leaves"))
+    
+    for dir in candidateDirs {
+        guard fm.fileExists(atPath: dir.path) else { continue }
+        if let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+            let pngs = files.filter {
+                $0.pathExtension.lowercased() == "png" &&
+                !$0.lastPathComponent.hasPrefix(".") &&
+                !$0.path.contains("originals")
+            }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            
+            var textures: [SKTexture] = []
+            for fileUrl in pngs {
+                if let rawImg = NSImage(contentsOf: fileUrl) {
+                    let cleaned = removeWhiteBackgroundIfNeeded(from: rawImg)
+                    let tex = SKTexture(image: cleaned)
+                    textures.append(tex)
+                }
+            }
+            if !textures.isEmpty {
+                return textures
+            }
+        }
+    }
+    return []
+}
+
+@MainActor func loadSpringLeafTextures() -> [SKTexture] {
+    let fm = FileManager.default
+    var candidateDirs: [URL] = []
+    
+    if let resUrl = Bundle.main.resourceURL {
+        candidateDirs.append(resUrl.appendingPathComponent("spring_leaves"))
+    }
+    candidateDirs.append(URL(fileURLWithPath: "spring_leaves"))
+    candidateDirs.append(Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("spring_leaves"))
     
     for dir in candidateDirs {
         guard fm.fileExists(atPath: dir.path) else { continue }
@@ -785,6 +820,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     var pool: [Flake] = []
     var tex: SKTexture?
     var leafTextures: [SKTexture] = []
+    var springLeafTextures: [SKTexture] = []
     var ballTex: SKTexture?
     var specksTex: SKTexture?
 
@@ -833,6 +869,9 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         tex = makeParticleTexture(season.shape)
         if newSeason.name == "autumn" && leafTextures.isEmpty {
             leafTextures = loadAutumnLeafTextures()
+        }
+        if newSeason.name == "spring" && springLeafTextures.isEmpty {
+            springLeafTextures = loadSpringLeafTextures()
         }
         ballTex = (season.pileMax > 0) ? makeBallTexture(season: season) : nil
         specksTex = (season.pileMax > 0) ? makeSpecksTexture(season: season) : nil
@@ -950,6 +989,19 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
             } else {
                 f.node.size = CGSize(width: leafSize * aspect, height: leafSize)
             }
+        } else if season.name == "spring" && !springLeafTextures.isEmpty {
+            let leafTex = springLeafTextures.randomElement()!
+            f.node.texture = leafTex
+            f.node.color = .white
+            f.node.colorBlendFactor = 0
+            let texSize = leafTex.size()
+            let leafSize: CGFloat = (li == 2 ? rnd(27, Cfg.leafMaxDim) : (li == 1 ? rnd(20, 27) : rnd(Cfg.leafMinDim, 20)))
+            let aspect = texSize.width / max(1, texSize.height)
+            if aspect >= 1.0 {
+                f.node.size = CGSize(width: leafSize, height: leafSize / aspect)
+            } else {
+                f.node.size = CGSize(width: leafSize * aspect, height: leafSize)
+            }
         } else {
             f.node.texture = tex
             f.node.color = season.palette.randomElement() ?? .white
@@ -959,7 +1011,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
 
         f.node.blendMode = season.additive ? .add : .alpha
         f.node.alpha = f.baseAlpha
-        f.node.zRotation = (season.name == "autumn") ? rnd(-0.2, 0.2) : (season.spin > 0 ? rnd(0, 6.28) : 0)
+        f.node.zRotation = (season.name == "autumn" || season.name == "spring") ? rnd(-0.2, 0.2) : (season.spin > 0 ? rnd(0, 6.28) : 0)
         f.node.xScale = 1
         f.node.zPosition = L.z
         f.node.position = CGPoint(x: rnd(-40, size.width + 40),
@@ -1572,7 +1624,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
                 continue
             }
 
-            if season.name == "autumn" {
+            if season.name == "autumn" || season.name == "spring" {
                 f.node.zRotation = sin(t * f.swayFreq + f.phase) * 0.15
             } else {
                 if season.spin > 0 { f.node.zRotation += f.spinRate * dt }
