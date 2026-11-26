@@ -1752,17 +1752,23 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         buildMenu()
 
+        // Wallpaper state: enabled by default so wallpapers change with season automatically
+        let savedWallpaper = UserDefaults.standard.object(forKey: kWallpaperEnabled) as? Bool ?? true
+        wallpaperItem.state = savedWallpaper ? .on : .off
+        UserDefaults.standard.set(savedWallpaper, forKey: kWallpaperEnabled)
+        if savedWallpaper {
+            saveOriginalWallpapersIfNeeded()
+        }
+
         // Apply settings
         applySeasonByName(currentSeasonName, isManualChoice: false)
         setAutoCalendar(savedAuto)
         setAmountByName(savedAmount)
         setEnabled(savedEnabled)
 
-        let savedWallpaper = UserDefaults.standard.bool(forKey: kWallpaperEnabled)
+        // Ensure wallpaper changes to the current season whenever the application starts
         if savedWallpaper {
-            setWallpaperEnabled(true)
-        } else {
-            wallpaperItem.state = .off
+            applyWallpaperForSeason(scene.season.name)
         }
 
         // Start hourly auto-calendar check
@@ -2077,15 +2083,42 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         return nil
     }
 
+    func resolveWallpaperFolder() -> URL? {
+        let fm = FileManager.default
+
+        // 1. User-chosen folder from UserDefaults
+        if let savedPath = UserDefaults.standard.string(forKey: kWallpaperFolder), !savedPath.isEmpty {
+            if fm.fileExists(atPath: savedPath) {
+                return URL(fileURLWithPath: savedPath)
+            }
+        }
+
+        // 2. Candidate folders (Resources bundle, local working directory, parent directory)
+        var candidateDirs: [URL] = []
+        if let resUrl = Bundle.main.resourceURL {
+            candidateDirs.append(resUrl.appendingPathComponent("wallpapers"))
+        }
+        candidateDirs.append(URL(fileURLWithPath: "wallpapers"))
+        candidateDirs.append(Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("wallpapers"))
+
+        for dir in candidateDirs {
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: dir.path, isDirectory: &isDir), isDir.boolValue {
+                UserDefaults.standard.set(dir.path, forKey: kWallpaperFolder)
+                return dir
+            }
+        }
+        return nil
+    }
+
     func applyWallpaperForSeason(_ seasonName: String) {
         guard wallpaperItem != nil && wallpaperItem.state == .on else { return }
-        guard let folderPath = UserDefaults.standard.string(forKey: kWallpaperFolder), !folderPath.isEmpty else {
+        guard let folderURL = resolveWallpaperFolder() else {
             print("Wallpaper folder not set. Please choose a wallpaper folder.")
             return
         }
-        let folderURL = URL(fileURLWithPath: folderPath)
         guard let fileURL = findWallpaperURL(for: seasonName, in: folderURL) else {
-            print("Wallpaper file for season '\(seasonName)' not found in \(folderPath).")
+            print("Wallpaper file for season '\(seasonName)' not found in \(folderURL.path).")
             return
         }
 
@@ -2127,8 +2160,8 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         panel.canChooseDirectories = true
         panel.canCreateDirectories = false
         panel.allowsMultipleSelection = false
-        if let savedPath = UserDefaults.standard.string(forKey: kWallpaperFolder) {
-            panel.directoryURL = URL(fileURLWithPath: savedPath)
+        if let currentFolder = resolveWallpaperFolder() {
+            panel.directoryURL = currentFolder
         }
         NSApp.activate(ignoringOtherApps: true)
         let response = panel.runModal()

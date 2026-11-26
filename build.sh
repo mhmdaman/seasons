@@ -82,6 +82,12 @@ if [[ -d "spring_leaves" ]]; then
     cp spring_leaves/*.png "$RESOURCES_DIR/spring_leaves/" 2>/dev/null || true
 fi
 
+if [[ -d "wallpapers" ]]; then
+    echo "==> Copying wallpapers to Resources..."
+    mkdir -p "$RESOURCES_DIR/wallpapers"
+    cp wallpapers/* "$RESOURCES_DIR/wallpapers/" 2>/dev/null || true
+fi
+
 echo "==> Ad-hoc code signing..."
 codesign --force --deep --sign - "$APP_BUNDLE"
 
