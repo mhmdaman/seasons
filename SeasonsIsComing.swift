@@ -1625,7 +1625,10 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
             }
 
             if season.name == "autumn" || season.name == "spring" {
-                f.node.zRotation = sin(t * f.swayFreq + f.phase) * 0.15
+                // Smooth slight banking rotation that sways with the wind and lateral motion
+                let swayTilt = -cos(t * f.swayFreq + f.phase) * 0.22
+                let windTilt = -(wind * f.windFactor) * 0.007
+                f.node.zRotation = swayTilt + windTilt
             } else {
                 if season.spin > 0 { f.node.zRotation += f.spinRate * dt }
                 if season.flip {
@@ -1694,11 +1697,19 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
     var accessNoteItem: NSMenuItem!
     var accessActionItem: NSMenuItem!
 
+    // Wallpaper menu items
+    var wallpaperItem: NSMenuItem!
+    var chooseFolderItem: NSMenuItem!
+    var restoreWallpaperItem: NSMenuItem!
+
     // UserDefaults keys
     let kSeason = "seasons_season"
     let kAuto = "seasons_auto"
     let kAmount = "seasons_amount"
     let kEnabled = "seasons_enabled"
+    let kWallpaperEnabled = "seasons_wallpaper_enabled"
+    let kWallpaperFolder = "seasons_wallpaper_folder"
+    let kOrigWallpapers = "seasons_orig_wallpapers"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Primary display selection (monitor with menu bar)
@@ -1746,6 +1757,13 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         setAutoCalendar(savedAuto)
         setAmountByName(savedAmount)
         setEnabled(savedEnabled)
+
+        let savedWallpaper = UserDefaults.standard.bool(forKey: kWallpaperEnabled)
+        if savedWallpaper {
+            setWallpaperEnabled(true)
+        } else {
+            wallpaperItem.state = .off
+        }
 
         // Start hourly auto-calendar check
         autoTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -1797,7 +1815,22 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
 
         menu.addItem(NSMenuItem.separator())
 
-        // 4. Pause / Resume
+        // 4. Wallpaper per season
+        wallpaperItem = NSMenuItem(title: "Change wallpaper with season", action: #selector(toggleWallpaperEnabled), keyEquivalent: "")
+        wallpaperItem.target = self
+        menu.addItem(wallpaperItem)
+
+        chooseFolderItem = NSMenuItem(title: "Choose wallpaper folder...", action: #selector(chooseWallpaperFolder), keyEquivalent: "")
+        chooseFolderItem.target = self
+        menu.addItem(chooseFolderItem)
+
+        restoreWallpaperItem = NSMenuItem(title: "Restore original wallpaper", action: #selector(restoreOriginalWallpaperAction), keyEquivalent: "")
+        restoreWallpaperItem.target = self
+        menu.addItem(restoreWallpaperItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // 5. Pause / Resume
         pauseItem = NSMenuItem(title: "Pause", action: #selector(togglePause), keyEquivalent: "")
         pauseItem.target = self
         menu.addItem(pauseItem)
@@ -1844,6 +1877,7 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         accessNoteItem.isHidden = trusted
         accessActionItem.isHidden = trusted
         launchAtLoginItem.state = (SMAppService.mainApp.status == .enabled) ? .on : .off
+        wallpaperItem.state = UserDefaults.standard.bool(forKey: kWallpaperEnabled) ? .on : .off
     }
 
     // MARK: Season Switching
@@ -1861,6 +1895,10 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         UserDefaults.standard.set(name, forKey: kSeason)
         if isManualChoice {
             setAutoCalendar(false)
+        }
+
+        if wallpaperItem != nil && wallpaperItem.state == .on {
+            applyWallpaperForSeason(name)
         }
     }
 
@@ -1961,6 +1999,151 @@ func rnd(_ a: CGFloat, _ b: CGFloat) -> CGFloat { CGFloat.random(in: a...b) }
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
+    }
+
+    // MARK: - Wallpaper Per Season
+
+    func screenKey(for screen: NSScreen, index: Int) -> String {
+        if let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber {
+            return "display_\(num.intValue)"
+        }
+        return "screen_\(index)"
+    }
+
+    func saveOriginalWallpapersIfNeeded() {
+        guard UserDefaults.standard.dictionary(forKey: kOrigWallpapers) == nil else { return }
+        var dict: [String: String] = [:]
+        for (i, screen) in NSScreen.screens.enumerated() {
+            if let url = NSWorkspace.shared.desktopImageURL(for: screen) {
+                let key = screenKey(for: screen, index: i)
+                dict[key] = url.absoluteString
+                dict["screen_\(i)"] = url.absoluteString
+            }
+        }
+        if !dict.isEmpty {
+            UserDefaults.standard.set(dict, forKey: kOrigWallpapers)
+        }
+    }
+
+    func restoreOriginalWallpapers() {
+        guard let dict = UserDefaults.standard.dictionary(forKey: kOrigWallpapers) as? [String: String] else {
+            print("No original wallpapers recorded to restore.")
+            return
+        }
+        let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+            .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+            .allowClipping: true
+        ]
+        for (i, screen) in NSScreen.screens.enumerated() {
+            let key = screenKey(for: screen, index: i)
+            if let urlStr = dict[key] ?? dict["screen_\(i)"], let url = URL(string: urlStr) {
+                do {
+                    try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: options)
+                } catch {
+                    print("Failed to restore wallpaper for screen \(i): \(error.localizedDescription)")
+                }
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: kOrigWallpapers)
+    }
+
+    func findWallpaperURL(for seasonName: String, in folder: URL) -> URL? {
+        let target = seasonName.lowercased()
+        let extensions = ["jpg", "jpeg", "png", "heic"]
+        let fm = FileManager.default
+
+        // Direct check first
+        for ext in extensions {
+            let candidate = folder.appendingPathComponent("\(target).\(ext)")
+            if fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+            let capCandidate = folder.appendingPathComponent("\(target.capitalized).\(ext)")
+            if fm.fileExists(atPath: capCandidate.path) {
+                return capCandidate
+            }
+        }
+
+        // Case-insensitive directory listing search
+        if let files = try? fm.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil) {
+            for file in files {
+                let ext = file.pathExtension.lowercased()
+                let base = file.deletingPathExtension().lastPathComponent.lowercased()
+                if base == target && extensions.contains(ext) {
+                    return file
+                }
+            }
+        }
+        return nil
+    }
+
+    func applyWallpaperForSeason(_ seasonName: String) {
+        guard wallpaperItem != nil && wallpaperItem.state == .on else { return }
+        guard let folderPath = UserDefaults.standard.string(forKey: kWallpaperFolder), !folderPath.isEmpty else {
+            print("Wallpaper folder not set. Please choose a wallpaper folder.")
+            return
+        }
+        let folderURL = URL(fileURLWithPath: folderPath)
+        guard let fileURL = findWallpaperURL(for: seasonName, in: folderURL) else {
+            print("Wallpaper file for season '\(seasonName)' not found in \(folderPath).")
+            return
+        }
+
+        let options: [NSWorkspace.DesktopImageOptionKey: Any] = [
+            .imageScaling: NSImageScaling.scaleProportionallyUpOrDown.rawValue,
+            .allowClipping: true
+        ]
+
+        for (i, screen) in NSScreen.screens.enumerated() {
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(fileURL, for: screen, options: options)
+            } catch {
+                print("Failed to set desktop image for screen \(i): \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func setWallpaperEnabled(_ enabled: Bool) {
+        wallpaperItem.state = enabled ? .on : .off
+        UserDefaults.standard.set(enabled, forKey: kWallpaperEnabled)
+        if enabled {
+            saveOriginalWallpapersIfNeeded()
+            applyWallpaperForSeason(scene.season.name)
+        } else {
+            restoreOriginalWallpapers()
+        }
+    }
+
+    @objc func toggleWallpaperEnabled() {
+        let newState = (wallpaperItem.state != .on)
+        setWallpaperEnabled(newState)
+    }
+
+    @objc func chooseWallpaperFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Wallpaper Folder"
+        panel.prompt = "Choose"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        if let savedPath = UserDefaults.standard.string(forKey: kWallpaperFolder) {
+            panel.directoryURL = URL(fileURLWithPath: savedPath)
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        let response = panel.runModal()
+        if response == .OK, let url = panel.url {
+            UserDefaults.standard.set(url.path, forKey: kWallpaperFolder)
+            if wallpaperItem.state == .on {
+                applyWallpaperForSeason(scene.season.name)
+            }
+        }
+    }
+
+    @objc func restoreOriginalWallpaperAction() {
+        restoreOriginalWallpapers()
+        wallpaperItem.state = .off
+        UserDefaults.standard.set(false, forKey: kWallpaperEnabled)
     }
 
     @objc func quitApp() {
